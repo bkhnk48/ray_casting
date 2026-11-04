@@ -31,3 +31,4 @@ outputs/
 
 # OS
 .DS_Store
+SMPL_NEUTRAL.pkl
