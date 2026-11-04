@@ -1,0 +1,399 @@
+from pathlib import Path
+import pickle
+
+import numpy as np
+from scipy.spatial import ConvexHull
+from belief_calculator.config import OCCLUSION_NEIGHBORS
+from belief_calculator.config import TORSO_PART_IDS
+from belief_calculator.config import ROTATION_PARENT_JOINTS
+from belief_calculator.config import NON_REPLACEABLE_ANCHORS
+from belief_calculator.config import HARMONIC_EPSILON
+from belief_calculator.config import ORIENTATION_EPSILON
+from belief_calculator.config import RIGID_BONES_RATIO
+from belief_calculator.config import OCCLUSION_CHECK_JOINTS
+from belief_calculator.config import CONFIDENCE_DELTA_CAP
+import pdb
+_TORSO_MASK = None
+
+
+def as_xyz(point):
+    arr = np.asarray(point, dtype=float)
+    if arr.shape != (3,):
+        raise ValueError("Expected shape (3,), got {}".format(arr.shape))
+    return arr
+
+
+_as_xyz = as_xyz
+
+
+def get_orientation_flag(joints, epsilon=ORIENTATION_EPSILON):
+    required = ("right_shoulder", "left_shoulder", "right_hip", "left_hip")
+    if not all(name in joints for name in required):
+        return {name: 0 for name in joints}
+    rs = as_xyz(joints["right_shoulder"])
+    ls = as_xyz(joints["left_shoulder"])
+    rh = as_xyz(joints["right_hip"])
+    lh = as_xyz(joints["left_hip"])
+    mid_shoulders = (rs + ls) / 2.0
+    mid_hips = (rh + lh) / 2.0
+    v_lr = rs - ls
+    v_spine = mid_shoulders - mid_hips
+    forward_vec = np.cross(v_lr, v_spine)
+    norm = float(np.linalg.norm(forward_vec))
+    if norm < 1e-8:
+        return {name: 0 for name in joints}
+    forward_vec /= norm
+    flags = {}
+    for name, pos in joints.items():
+        parent = ROTATION_PARENT_JOINTS.get(name)
+        if parent is None or parent not in joints:
+            flags[name] = 0
+            continue
+        dot = float(np.dot(as_xyz(pos) - as_xyz(joints[parent]), forward_vec))
+        flags[name] = 0 if abs(dot) < epsilon else (1 if dot > 0 else -1)
+    return flags
+
+
+def load_torso_mask(seg_path=None):
+    global _TORSO_MASK
+    # 1. Prefer precomputed torso vertex indices
+    torso_idx_path = Path("models/torso_indices.npy")
+    if torso_idx_path.exists():
+        try:
+            indices = np.load(torso_idx_path)
+            mask = np.zeros(6890, dtype=bool)
+            mask[indices] = True
+            _TORSO_MASK = mask
+            print(f"[Fusion] Torso mask loaded from {torso_idx_path}: {int(_TORSO_MASK.sum())} / 6890 vertices")
+            return _TORSO_MASK
+        except Exception:
+            pass
+
+    # 2. Check segmentation mapping pkl
+    if seg_path and Path(seg_path).exists():
+        try:
+            with Path(seg_path).open("rb") as f:
+                seg = pickle.load(f, encoding="latin1")
+            _TORSO_MASK = np.isin(seg["smpl_index"], list(TORSO_PART_IDS))
+            print("[Fusion] Torso mask loaded from segmentation: {} / 6890 vertices".format(int(_TORSO_MASK.sum())))
+            return _TORSO_MASK
+        except Exception:
+            pass
+
+    # 3. Fallback: extract directly via smplx
+    for smpl_candidate in ("models/smpl/SMPL_NEUTRAL.pkl", "models/SMPL_NEUTRAL.pkl"):
+        p = Path(smpl_candidate)
+        if p.exists():
+            try:
+                import inspect
+                if not hasattr(inspect, "getargspec"):
+                    inspect.getargspec = inspect.getfullargspec
+                for t in ["bool", "int", "float", "complex", "object", "unicode", "str"]:
+                    if not hasattr(np, t):
+                        setattr(np, t, getattr(__builtins__, t, None))
+                import smplx
+                smpl = smplx.create(str(p.parent), model_type="smpl", gender="neutral")
+                weights = smpl.lbs_weights.numpy()
+                part_ids = np.argmax(weights, axis=1)
+                _TORSO_MASK = np.isin(part_ids, [0, 3, 6, 9, 12, 13, 14])
+                print("[Fusion] Torso mask extracted from smplx weights: {} / 6890 vertices".format(int(_TORSO_MASK.sum())))
+                np.save("models/torso_indices.npy", np.where(_TORSO_MASK)[0])
+                return _TORSO_MASK
+            except Exception:
+                pass
+
+    print("[Fusion] Warning: Torso mask not available. Disabling occlusion ray-casting to prevent false positives.")
+    _TORSO_MASK = None
+    return None
+
+
+import trimesh
+
+
+def require_ray_casting_backend() -> None:
+    try:
+        import rtree  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError(
+            "fusion.occlusion.enabled requires the 'rtree' package; install requirements.txt"
+        ) from exc
+
+
+def compute_visibility_from_mesh_vertices(joints, verts, intrinsics=None, occlusion_tau=0.05, extra_verts=None):
+    """
+    3D Ray-casting occlusion detection:
+    For each joint in OCCLUSION_CHECK_JOINTS, cast a 3D ray from camera center (0, 0, 0)
+    to the joint position. If the ray intersects the 3D torso mesh surface at a distance
+    significantly closer than the joint (hit_distance < joint_distance - occlusion_tau),
+    the joint is marked as occluded (visibility = False).
+    """
+    visibility = {name: True for name in joints.keys()}
+    if verts is None or _TORSO_MASK is None:
+        return visibility
+    verts = np.asarray(verts, dtype=float)
+    if verts.ndim != 2 or len(verts) != len(_TORSO_MASK):
+        return visibility
+
+    torso_verts = verts[_TORSO_MASK]
+    if len(torso_verts) < 4:
+        return visibility
+
+    try:
+        hull_3d = ConvexHull(torso_verts)
+        mesh = trimesh.Trimesh(vertices=torso_verts, faces=hull_3d.simplices, process=False)
+        if extra_verts is not None:
+            extra_v = np.asarray(extra_verts, dtype=float)
+            if extra_v.ndim == 2 and len(extra_v) == len(_TORSO_MASK):
+                extra_torso = extra_v[_TORSO_MASK]
+                if len(extra_torso) >= 4:
+                    hull_extra = ConvexHull(extra_torso)
+                    mesh_extra = trimesh.Trimesh(vertices=extra_torso, faces=hull_extra.simplices, process=False)
+                    mesh = trimesh.util.concatenate([mesh, mesh_extra])
+    except Exception:
+        return visibility
+
+    check_names = [name for name in joints.keys() if name in OCCLUSION_CHECK_JOINTS]
+    if not check_names:
+        return visibility
+
+    pts = np.array([as_xyz(joints[name]) for name in check_names], dtype=float)
+    dists = np.linalg.norm(pts, axis=1)
+    valid = dists > 1e-6
+    if not np.any(valid):
+        return visibility
+
+    ray_dirs = np.zeros_like(pts)
+    ray_dirs[valid] = pts[valid] / dists[valid, None]
+    ray_origins = np.zeros_like(ray_dirs)
+
+    try:
+        locs, index_ray, _ = mesh.ray.intersects_location(ray_origins[valid], ray_dirs[valid])
+    except Exception as exc:
+        raise RuntimeError("Occlusion ray-casting failed") from exc
+    if len(locs) > 0:
+        valid_indices = np.where(valid)[0]
+        for loc, ray_i in zip(locs, index_ray):
+            orig_idx = valid_indices[ray_i]
+            hit_dist = float(np.linalg.norm(loc))
+            if hit_dist < (dists[orig_idx] - occlusion_tau):
+                visibility[check_names[orig_idx]] = False
+                pdb.set_trace()
+
+
+    return visibility
+
+def compute_single_camera_belief(
+    cam,
+    joint_names,
+    vis,
+    alpha,
+    beta,
+    epsilon=HARMONIC_EPSILON,
+):
+    def parse_float(value, default):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            import re
+            m = re.search(
+                r"[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?",
+                str(value),
+            )
+            return float(m.group(0)) if m else default
+
+    alpha = parse_float(alpha, 0.0)
+    beta = parse_float(beta, 0.8)
+
+    neighbors = {}
+    for child, parent in RIGID_BONES_RATIO.keys():
+        neighbors.setdefault(child, []).append(parent)
+        neighbors.setdefault(parent, []).append(child)
+
+    # P: local belief
+    P = {}
+    for name in joint_names:
+        if name not in cam:
+            P[name] = 0.0
+            continue
+
+        C = 1.0 if vis.get(name, True) else 0.1
+        p_c = as_xyz(cam[name])
+        L = float(np.linalg.norm(p_c))
+        P[name] = C / (1.0 + alpha * L ** 2)
+
+    # H: global belief trong một camera
+    H = {}
+    for name in joint_names:
+        p = P[name]
+        nb = [
+            P[n]
+            for n in neighbors.get(name, [])
+            if n in P
+        ]
+
+        b = (
+            beta * (sum(nb) / len(nb))
+            + (1.0 - beta) * p
+        ) if nb else p
+
+        H[name] = (
+            2.0 * b * p
+        ) / (b + p + epsilon)
+
+    return P, H
+
+#Hàm compute_harmonic_precision đã được sửa chữa so với nguyên bản để tránh trùng lặp code  
+def compute_harmonic_precision(
+    cam1,
+    cam2,
+    joint_names,
+    vis1,
+    vis2,
+    alpha,
+    beta,
+    epsilon=HARMONIC_EPSILON,
+):
+    P1, H1 = compute_single_camera_belief(
+        cam1, joint_names, vis1, alpha, beta, epsilon
+    )
+
+    P2, H2 = compute_single_camera_belief(
+        cam2, joint_names, vis2, alpha, beta, epsilon
+    )
+
+    weights = {
+        name: (H1[name] + H2[name]) / 2.0
+        for name in joint_names
+    }
+
+    return weights, H1, H2
+
+
+def _confidence_value(confidence_by_joint, name):
+    if not confidence_by_joint or name not in confidence_by_joint:
+        return None
+    value = confidence_by_joint[name]
+    if isinstance(value, (list, tuple, np.ndarray)):
+        if len(value) < 3:
+            return None
+        value = value[2]
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(value):
+        return None
+    return max(0.0, value)
+
+
+def _harmonic_blend(base_confidence, external_confidence, epsilon=HARMONIC_EPSILON):
+    if external_confidence is None:
+        return float(base_confidence)
+    base_confidence = max(0.0, float(base_confidence))
+    external_confidence = max(0.0, float(external_confidence))
+    return float((2.0 * base_confidence * external_confidence) / (base_confidence + external_confidence + epsilon))
+
+
+def _blend_detector_confidences(joint_names, base_confidences, external_confidences, vis=None):
+    blended = {}
+    for name in joint_names:
+        ext_val = _confidence_value(external_confidences, name)
+        # ponytail: 3D geometry & physics is the decider. If 3D mesh proves joint is occluded,
+        # high 2D confidence is a hallucination (e.g. snapped to another person) -> suppress to 0.1
+        if vis is not None and not vis.get(name, True) and ext_val is not None and ext_val > 0.3:
+            ext_val = 0.1
+        blended[name] = _harmonic_blend(base_confidences[name], ext_val)
+    return blended
+
+
+def detect_cross_view_errors(
+    cam1,
+    cam2,
+    names,
+    vis1,
+    vis2,
+    alpha,
+    beta,
+    confidence2d1=None,
+    confidence2d2=None,
+    uncertainty_gating=True,
+    min_confidence=0.1,
+):
+    flags1 = get_orientation_flag(cam1)
+    flags2 = get_orientation_flag(cam2)
+    m_set = {
+        n
+        for n in names
+        if (flags1.get(n, 0) == 1 and flags2.get(n, 0) == -1)
+        or (flags1.get(n, 0) == -1 and flags2.get(n, 0) == 1)
+    }
+
+    _, H1_old, H2_old = compute_harmonic_precision(cam1, cam2, names, vis1, vis2, alpha=alpha, beta=beta)
+    H1_all = _blend_detector_confidences(names, H1_old, confidence2d1, vis=vis1)
+    H2_all = _blend_detector_confidences(names, H2_old, confidence2d2, vis=vis2)
+    all_weights = {name: (H1_all[name] + H2_all[name]) / 2.0 for name in names}
+    abs_diffs = [abs(H1_all[n] - H2_all[n]) for n in names]
+    delta = min(float(np.percentile(abs_diffs, 75)) if abs_diffs else 0.0, CONFIDENCE_DELTA_CAP)
+    if uncertainty_gating:
+        k1_set = {n for n in names if H1_all[n] > H2_all[n] + delta and vis1.get(n, True) and H1_all[n] >= min_confidence}
+        # ponytail: occluded rescue — cam1 blind + cam2 sees + cam2 actually better → k2_set
+        k2_set = {
+            n for n in names
+            if H2_all[n] >= min_confidence
+            and (
+                (H2_all[n] > H1_all[n] + delta and vis2.get(n, True))                          # normal path
+                or (not vis1.get(n, True) and vis2.get(n, True) and H2_all[n] > H1_all[n])      # occluded: still require H2 > H1
+            )
+        }
+    else:
+        k1_set = {n for n in names if H1_all[n] > H2_all[n] + delta}
+        k2_set = {n for n in names if H2_all[n] > H1_all[n] + delta}
+    k1_set.difference_update(NON_REPLACEABLE_ANCHORS)
+    k2_set.difference_update(NON_REPLACEABLE_ANCHORS)
+
+    l_list = [n for n in names if n not in (m_set | k1_set | k2_set)]
+    return {
+        "M": m_set,
+        "K1": k1_set,
+        "K2": k2_set,
+        "L": l_list,
+        "weights": all_weights,
+        "H1": H1_all,
+        "H2": H2_all,
+        "flags1": flags1,
+        "flags2": flags2,
+    }
+
+
+def _pairwise_joint_distance_stats(data):
+    cam1, cam2 = data.get("camera1", {}), data.get("camera2", {})
+    distances = []
+    for j in sorted(set(cam1) & set(cam2)):
+        try:
+            d = np.linalg.norm(np.asarray(cam1[j])[:3] - np.asarray(cam2[j])[:3])
+            distances.append(float(d))
+        except Exception:
+            pass
+    if not distances:
+        return float("nan"), float("nan"), float("nan"), float("nan")
+    arr = np.array(distances)
+    return float(np.percentile(arr, 25)), float(np.percentile(arr, 75)), float(np.mean(arr)), float(np.median(arr))
+
+
+def make_raw_judgement_fallback(data, index, error=None):
+    stats = _pairwise_joint_distance_stats(data)
+    common = sorted(set(data["camera1"]) & set(data["camera2"]))
+    return {
+        "M": [],
+        "K1": [],
+        "K2": [],
+        "A_new": common,
+        "F": [],
+        "before_stats": stats,
+        "after_stats": stats,
+        "optimized": data,
+        "fallback_reason": str(error),
+        "joint_confidence": {"camera1": {j: 1.0 for j in common}, "camera2": {j: 1.0 for j in common}},
+        "vis1": {j: True for j in common},
+        "vis2": {j: True for j in common},
+    }

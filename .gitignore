@@ -1,0 +1,33 @@
+
+# Virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Experimental datasets and outputs
+inputs/datasets/
+outputs/
+
+# Model checkpoints and weights
+*.pth
+*.pth.tar
+*.pt
+*.ckpt
+
+# Large data files
+*.pkl
+*.npz
+*.npy
+*.zip
+
+# Video and image data
+*.mp4
+*.mov
+*.avi
+
+# OS
+.DS_Store
