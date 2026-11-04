@@ -314,7 +314,7 @@ Người sử dụng cần:
 
 Repository WHAM:
 
-https://github.com/yohanshin/WHAM
+https://github.com/bkhnk48/WHAM_BK
 
 WHAM được sử dụng để tạo ra các kết quả ước lượng tư thế 3D từ video đầu vào.
 
