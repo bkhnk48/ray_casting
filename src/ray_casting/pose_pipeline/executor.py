@@ -97,71 +97,40 @@ def run_pose_export(
     occlusion_tau=0.05,
     config=None,
 ) -> None:
-    #paths = config["paths"]
-    #inputs = resolve_inputs(config)
-    #pose_cfg = config.get("pose_export", {})
     pose_cfg = {}
 
-    #if not pose_cfg.get("enabled", True):
-    #    print("[Pose] Disabled by config: pose_export.enabled=false")
-    #    return
 
     cam1_file = Path(cam1_pkl)
-    #cam2_file = Path(inputs["cam2_pkl"])
     smpl_model_path = Path("src/ray_casting/models/SMPL_NEUTRAL.pkl")
     output_dir = Path("outputs")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("[Pose] Loading SMPL model...")
-    #pdb.set_trace()
 
     model = create_smpl_model(smpl_model_path)
 
     target_person = "1"#inputs.get("target_person")
     print(f"[Pose] Loading camera 1: {cam1_file} (target_person={target_person})")
     cam1_data = load_pkl_data(cam1_file, target_person=target_person)
-    #print(f"[Pose] Loading camera 2: {cam2_file} (target_person={target_person})")
-    #cam2_data = load_pkl_data(cam2_file, target_person=target_person)
     cam1_tracking_frame_ids = _resolve_tracking_frame_ids(cam1_data)
-    #cam2_tracking_frame_ids = _resolve_tracking_frame_ids(cam2_data)
 
-    #offset, _ = resolve_selected_offset_from_camera_profile(config)
-    #cam1_start = max(0, -offset)
     cam1_start = max(0, -0)
-    #cam2_start = max(0, offset)
-    #synced_total_frames = max(0, min(len(cam1_data["pose"]) - cam1_start, len(cam2_data["pose"]) - cam2_start))
-
-    #min_frames = synced_total_frames
     sync_result = {
         "offset": 0,
         "left_start": cam1_start,
-        #"right_start": cam2_start,
-        #"frame_count": min_frames,
         "source_pkls": {
             "camera1": str(cam1_file.resolve()),
-            #"camera2": str(cam2_file.resolve()),
         },
     }
 
     min_frames = len(cam1_data['pose'])
 
     print(f"[Pose] Cam1 frames: {len(cam1_data['pose'])}")
-    #print(f"[Pose] Cam2 frames: {len(cam2_data['pose'])}")
-    #print(f"[Pose] Exporting full synced range: {min_frames} frames")
-    #print(f"[Pose] Using offset={offset}")
-    #print(f"[Pose] Exporting {min_frames} pose JSON files...")
 
-    #j_regressor_path = paths.get("j_regressor_3d", "../models/J_regressor_body25_plus_palm27.npy")
     j_regressor_path = "src/ray_casting/models/J_regressor_body25_plus_palm27.npy"
 
     cam1_export_data = slice_person_frames(cam1_data, cam1_start, min_frames)
-    #cam2_export_data = slice_person_frames(cam2_data, cam2_start, min_frames)
-    #if min_frames:
-    #    # Keep the master baseline identical while giving both views one body shape.
-    #    shared_betas = _shared_betas(cam1_export_data)
-    #    for camera_data in (cam1_export_data, cam2_export_data):
-    #        camera_data["betas"] = np.repeat(shared_betas[None, :], min_frames, axis=0)
 
     use_world = bool(pose_cfg.get("use_world_coords", False))
     path_keypoints3d_map = "configs/keypoints3D_map.yml"
@@ -174,25 +143,14 @@ def run_pose_export(
     # Sử dụng tqdm bọc quanh range() để tạo progress bar
     for i in tqdm(range(min_frames), desc="[Pose] Exporting JSONs", unit="frame"):
         out_frame_id = i + 1
-        joints = get_3d_joints_for_frame(
-            model,
-            cam1_export_data,
-            i,
-            j_regressor_path,
-            path_keypoints3d_map,
-            use_world=use_world,
-        )
+        joints = get_3d_joints_for_frame(model, cam1_export_data, i, j_regressor_path, path_keypoints3d_map,\
+                                         use_world=use_world,)
 
         verts = cam1_export_data["verts"][i]
 
         belief_data = calculate_camera_belief(
-            joints=joints,
-            verts=verts,
-            joint_names=joint_names,
-            alpha=belief_alpha,
-            beta=belief_beta,
-            occlusion_tau=occlusion_tau,
-        )
+            joints=joints, verts=verts, joint_names=joint_names, alpha=belief_alpha, beta=belief_beta,
+            occlusion_tau=occlusion_tau,)
 
         source_frame_id = (
             int(cam1_tracking_frame_ids[cam1_start + i])
@@ -200,9 +158,7 @@ def run_pose_export(
             else cam1_start + i
         )
 
-        keypoints3d_data = {
-            camera_name: joints
-        }
+        keypoints3d_data = {camera_name: joints}
 
         metadata_data = {
             "metadata": {
@@ -220,20 +176,11 @@ def run_pose_export(
             "joints": belief_data,
         }
 
-        write_json(
-            output_dir / "keypoints3d" / f"pose_data_{out_frame_id}.json",
-            keypoints3d_data,
-        )
+        write_json(output_dir / "keypoints3d" / f"pose_data_{out_frame_id}.json", keypoints3d_data)
 
-        write_json(
-            output_dir / "metadata" / f"pose_data_{out_frame_id}.json",
-            metadata_data,
-        )
+        write_json(output_dir / "metadata" / f"pose_data_{out_frame_id}.json", metadata_data)
 
-        write_json(
-            output_dir / "belief" / f"belief_{out_frame_id}.json",
-            belief_output,
-        )
+        write_json(output_dir / "belief" / f"belief_{out_frame_id}.json", belief_output)
 
     print(f"[Pose] Done. Output: {output_dir}")
 
