@@ -56,7 +56,7 @@ def get_orientation_flag(joints, epsilon=ORIENTATION_EPSILON):
 
 def load_torso_mask(seg_path=None):
     global _TORSO_MASK
-    pdb.set_trace()
+    #pdb.set_trace()
     # 1. Prefer precomputed torso vertex indices
     torso_idx_path = Path("src/ray_casting/models/torso_indices.npy")
     if torso_idx_path.exists():
