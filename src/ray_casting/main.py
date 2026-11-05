@@ -7,6 +7,8 @@ from collections import defaultdict
 #from models.keypoints_map import load_keypoints3d_map
 from pose_pipeline.executor import load_pkl_data
 from pose_pipeline.executor import run_pose_export
+from belief_calculator.detector import load_torso_mask
+from belief_calculator.detector import require_ray_casting_backend
 
 def main():
     pass
@@ -26,6 +28,11 @@ if __name__ == "__main__":
     #lệnh dưới đây OK rồi
     #data = load_pkl_data(args.pkl)
     #data = 
+    
+    require_ray_casting_backend()
+    #if load_torso_mask(paths["segmentation"]) is None:
+    if load_torso_mask(None) is None:
+        raise RuntimeError("fusion.occlusion.enabled requires a valid SMPL torso mask")
     run_pose_export(args.pkl)
     #print(data)
     """print(type(data))
