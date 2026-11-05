@@ -165,20 +165,22 @@ def _split_mpi_inf_3dhpe(cam_file):
 
 #def run_pose_export(cam1_pkl, config = None) -> None:
 def run_pose_export(
-    cam1_pkl,
-    camera_name="camera1",
+    args,
+    #camera_name="camera1",
     belief_alpha=0.1,
     belief_beta=0.8,
     occlusion_tau=0.05,
     config=None,
 ) -> None:
     pose_cfg = config or {}
+    cam1_pkl_path = args.pkl
+    outputs_path = args.output
 
-    cam1_file = Path(cam1_pkl)
-    set_name, camera_name = _split_mpi_inf_3dhpe(cam1_pkl)
+    cam1_file = Path(cam1_pkl_path)
+    set_name, camera_name = _split_mpi_inf_3dhpe(cam1_pkl_path)
 
     smpl_model_path = Path("src/ray_casting/models/SMPL_NEUTRAL.pkl")
-    output_dir = Path("outputs")
+    output_dir = Path(outputs_path)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -294,8 +296,9 @@ def run_pose_export(
         # Tổng hợp dữ liệu cho một dòng CSV
         row = {
             "F_ID": out_frame_id,
+            "Set": set_name,
             "Cam": camera_name,
-            "SourceF_ID": source_frame_id,
+            #"SourceF_ID": source_frame_id,
             "PKL_F_ID": pkl_frame_id,
 
             # Metadata: ánh xạ trực tiếp theo tên cột CSV
@@ -324,8 +327,8 @@ def run_pose_export(
     # Tạo tập hợp tất cả các cột xuất hiện trong dữ liệu
     fieldnames = [
         "F_ID",
+        "Set",
         "Cam",
-        "SourceF_ID",
         "PKL_F_ID",
         "offset",
         "left_start",
