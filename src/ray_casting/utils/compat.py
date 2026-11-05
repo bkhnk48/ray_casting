@@ -44,7 +44,6 @@ def parse_person_mapping(pkl_path):
 
 
 def resolve_person_payload(wham_data, pkl_path=None, target_person=None):
-    pdb.set_trace()
     if not isinstance(wham_data, dict) and "defaultdict" not in str(type(wham_data)):
         if isinstance(wham_data, list):
             for v in wham_data:
