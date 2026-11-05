@@ -25,7 +25,6 @@ def load_pkl_data(file_path, target_person=None):
     file_path = Path(file_path)
     if not file_path.exists():
         raise FileNotFoundError("PKL file not found: {}".format(file_path))
-    pdb.set_trace()
     person_data = resolve_person_payload(load_joblib_compat(file_path), pkl_path=file_path, target_person=target_person)
     if person_data is None:
         raise ValueError("Cannot read person payload from {}".format(file_path))
