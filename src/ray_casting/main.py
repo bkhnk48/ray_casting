@@ -30,11 +30,9 @@ if __name__ == "__main__":
     #data = 
     
     require_ray_casting_backend()
-    #if load_torso_mask(paths["segmentation"]) is None:
     if load_torso_mask(None) is None:
         raise RuntimeError("fusion.occlusion.enabled requires a valid SMPL torso mask")
     run_pose_export(args.pkl)
-    #print(data)
     """print(type(data))
 
     if isinstance(data, dict):
