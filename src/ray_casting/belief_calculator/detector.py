@@ -82,7 +82,7 @@ def load_torso_mask(seg_path=None):
             pass
 
     # 3. Fallback: extract directly via smplx
-    for smpl_candidate in ("models/smpl/SMPL_NEUTRAL.pkl", "models/SMPL_NEUTRAL.pkl"):
+    for smpl_candidate in ("src/ray_casting/models/smpl/SMPL_NEUTRAL.pkl", "src/ray_casting/models/SMPL_NEUTRAL.pkl"):
         p = Path(smpl_candidate)
         if p.exists():
             try:
