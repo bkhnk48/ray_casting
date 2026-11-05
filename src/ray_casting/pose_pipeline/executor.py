@@ -163,187 +163,223 @@ def _split_mpi_inf_3dhpe(cam_file):
     camera_name = elems[-1]
     return set_name, camera_name
 
-#def run_pose_export(cam1_pkl, config = None) -> None:
-def run_pose_export(
-    args,
-    #camera_name="camera1",
-    belief_alpha=0.1,
-    belief_beta=0.8,
-    occlusion_tau=0.05,
-    config=None,
-) -> None:
-    pose_cfg = config or {}
-    cam1_pkl_path = args.pkl
-    outputs_path = args.output
 
-    cam1_file = Path(cam1_pkl_path)
-    set_name, camera_name = _split_mpi_inf_3dhpe(cam1_pkl_path)
-
-    smpl_model_path = Path("src/ray_casting/models/SMPL_NEUTRAL.pkl")
-    output_dir = Path(outputs_path)
+def _create_pose_output_dirs(output_dir):
+    """Tạo các thư mục đầu ra."""
+    directories = {
+        "keypoints": output_dir / "keypoints3d",
+        "metadata": output_dir / "metadata",
+        "belief": output_dir / "belief",
+    }
 
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    keypoints_dir = output_dir / "keypoints3d"
-    metadata_dir = output_dir / "metadata"
-    belief_dir = output_dir / "belief"
-
-    for directory in (keypoints_dir, metadata_dir, belief_dir):
+    for directory in directories.values():
         directory.mkdir(parents=True, exist_ok=True)
 
+    return directories
+
+
+def _prepare_pose_export_context(args, config):
+    """Khởi tạo model, dữ liệu PKL và thông tin camera."""
+    cam1_file = Path(args.pkl)
+    output_dir = Path(args.output)
+    set_name, camera_name = _split_mpi_inf_3dhpe(args.pkl)
+
+    directories = _create_pose_output_dirs(output_dir)
+
     print("[Pose] Loading SMPL model...")
-    model = create_smpl_model(smpl_model_path)
+    model = create_smpl_model(
+        Path("src/ray_casting/models/SMPL_NEUTRAL.pkl")
+    )
 
-    target_person = "1"
-
-    print(f"[Pose] Loading camera 1: {cam1_file} (target_person={target_person})")
-
-    cam1_data = load_pkl_data(cam1_file, target_person=target_person,)
-
-    cam1_tracking_frame_ids = _resolve_tracking_frame_ids(cam1_data)
+    print(f"[Pose] Loading camera: {cam1_file} (target_person=1)")
+    cam1_data = load_pkl_data(cam1_file, target_person="1")
+    tracking_ids = _resolve_tracking_frame_ids(cam1_data)
 
     cam1_start = 0
-
-    #sync_result = { "offset": 0, "left_start": cam1_start, "source_pkls": { camera_name: str(cam1_file.resolve()),}, }
-    sync_result = { "offset": 0, "left_start": cam1_start, "source_pkls": { camera_name: camera_name,}, }
-
     min_frames = len(cam1_data["pose"])
+    print(f"[Pose] Camera frames: {min_frames}")
 
-    print(f"[Pose] Cam1 frames: {min_frames}")
+    sync_result = {
+        "offset": 0,
+        "left_start": cam1_start,
+        "source_pkls": {camera_name: camera_name},
+    }
 
-    j_regressor_path = ("src/ray_casting/models/J_regressor_body25_plus_palm27.npy")
+    export_data = slice_person_frames(
+        cam1_data, cam1_start, min_frames
+    )
 
-    cam1_export_data = slice_person_frames(cam1_data, cam1_start, min_frames,)
+    map_path = "configs/keypoints3D_map.yml"
+    map_data = load_keypoints3d_map(map_path)
+    joint_names = [kp["name"] for kp in map_data["keypoints"]]
 
-    use_world = bool(pose_cfg.get("use_world_coords", False))
+    return {
+        "model": model,
+        "cam1_data": cam1_data,
+        "export_data": export_data,
+        "tracking_ids": tracking_ids,
+        "cam1_start": cam1_start,
+        "min_frames": min_frames,
+        "set_name": set_name,
+        "camera_name": camera_name,
+        "sync_result": sync_result,
+        "joint_names": joint_names,
+        "map_path": map_path,
+        "output_dir": output_dir,
+        "directories": directories,
+        "use_world": bool((config or {}).get("use_world_coords", False)),
+    }
 
-    path_keypoints3d_map = "configs/keypoints3D_map.yml"
 
-    map_data = load_keypoints3d_map(path_keypoints3d_map)
+def _get_source_frame_id(tracking_ids, start, index):
+    """Lấy frame ID gốc từ tracking hoặc chỉ số tuần tự."""
+    if tracking_ids is not None:
+        return int(tracking_ids[start + index])
+    return start + index
 
-    joint_names = [ kp["name"] for kp in map_data["keypoints"] ]
 
-    csv_rows = []
+def _calculate_frame_pose(context, index, alpha, beta, tau):
+    """Tính 3D joints và camera belief cho một frame."""
+    export_data = context["export_data"]
 
-    for i in tqdm(range(min_frames), desc="[Pose] Exporting JSONs and CSV", unit="frame",):
-        out_frame_id = i + 1
+    joints = get_3d_joints_for_frame(
+        context["model"],
+        export_data,
+        index,
+        "src/ray_casting/models/J_regressor_body25_plus_palm27.npy",
+        context["map_path"],
+        use_world=context["use_world"],
+    )
 
-        joints = get_3d_joints_for_frame(
-            model,
-            cam1_export_data,
-            i,
-            j_regressor_path,
-            path_keypoints3d_map,
-            use_world=use_world,
-        )
+    verts = export_data["verts"][index]
 
-        verts = cam1_export_data["verts"][i]
+    belief = calculate_camera_belief(
+        joints=joints,
+        verts=verts,
+        joint_names=context["joint_names"],
+        alpha=alpha,
+        beta=beta,
+        occlusion_tau=tau,
+    )
 
-        belief_data = calculate_camera_belief(
-            joints=joints,
-            verts=verts,
-            joint_names=joint_names,
-            alpha=belief_alpha,
-            beta=belief_beta,
-            occlusion_tau=occlusion_tau,
-        )
+    return joints, belief
 
-        source_frame_id = (
-            int(cam1_tracking_frame_ids[cam1_start + i])
-            if cam1_tracking_frame_ids is not None
-            else cam1_start + i
-        )
 
-        pkl_frame_id = int(cam1_data["frame_ids"][i])
+def _build_frame_metadata(context, source_frame_id):
+    """Tạo metadata cho một frame."""
+    camera_name = context["camera_name"]
 
-        keypoints3d_data = joints
-        #{
-        #    #camera_name: joints,
-        #}
-
-        metadata_data = {
-            "metadata": {
-                "camera_sync": sync_result,
-                "source_frame_indices": {
-                    camera_name: source_frame_id,
-                },
-            }
+    return {
+        "metadata": {
+            "camera_sync": context["sync_result"],
+            "source_frame_indices": {
+                camera_name: source_frame_id,
+            },
         }
+    }
 
-        belief_output = {
-            "camera": camera_name,
-            "source_frame_id": source_frame_id,
-            "pkl_frame_id": pkl_frame_id,
-            "joints": belief_data,
-        }
 
-        # Giữ nguyên các file JSON
-        write_json(
-            keypoints_dir / f"pose_data_{out_frame_id}.json",
-            keypoints3d_data,
-        )
+def _write_frame_jsons(context, frame_id, joints, metadata, belief):
+    """Ghi ba loại JSON cho một frame."""
+    directories = context["directories"]
+    camera_name = context["camera_name"]
+    cam1_data = context["cam1_data"]
 
-        write_json(
-            metadata_dir / f"pose_data_{out_frame_id}.json",
-            metadata_data,
-        )
+    pkl_frame_id = int(cam1_data["frame_ids"][frame_id - 1])
 
-        write_json(
-            belief_dir / f"belief_{out_frame_id}.json",
-            belief_output,
-        )
+    belief_output = {
+        "camera": camera_name,
+        "source_frame_id": metadata["metadata"][
+            "source_frame_indices"
+        ][camera_name],
+        "pkl_frame_id": pkl_frame_id,
+        "joints": belief,
+    }
 
-        # Tổng hợp dữ liệu cho một dòng CSV
-        row = {
-            "F_ID": out_frame_id,
-            "Set": set_name,
-            "Cam": camera_name,
-            #"SourceF_ID": source_frame_id,
-            "PKL_F_ID": pkl_frame_id,
+    write_json(
+        directories["keypoints"] / f"pose_data_{frame_id}.json",
+        joints,
+    )
+    write_json(
+        directories["metadata"] / f"pose_data_{frame_id}.json",
+        metadata,
+    )
+    write_json(
+        directories["belief"] / f"belief_{frame_id}.json",
+        belief_output,
+    )
 
-            # Metadata: ánh xạ trực tiếp theo tên cột CSV
-            "offset": sync_result["offset"],
-            "left_start": sync_result["left_start"],
-            f"PKLs": sync_result["source_pkls"][camera_name],
-            f"FrameIndices": source_frame_id,
-        }
+    return pkl_frame_id
 
-        # Keypoints 3D:
-        # Tạo camera1.head.x thay vì keypoints3d.camera1.head.x
-        row.update(
-            _flatten_dict(
-                keypoints3d_data,
-                prefix="",
-            )
-        )
 
-        # Belief của từng joint
-        row.update(
-            flatten_belief_data(belief_data)
-        )
+def _build_pose_csv_row(context, frame_id, pkl_frame_id,
+                        source_frame_id, joints, metadata, belief):
+    """Tổng hợp dữ liệu của một frame thành một dòng CSV."""
+    camera_name = context["camera_name"]
+    sync = context["sync_result"]
 
-        csv_rows.append(row)
+    row = {
+        "F_ID": frame_id,
+        "Set": context["set_name"],
+        "Cam": camera_name,
+        "PKL_F_ID": pkl_frame_id,
+        "offset": sync["offset"],
+        "left_start": sync["left_start"],
+        "PKLs": sync["source_pkls"][camera_name],
+        "FrameIndices": source_frame_id,
+    }
 
-    # Tạo tập hợp tất cả các cột xuất hiện trong dữ liệu
+    row.update(_flatten_dict(joints))
+    row.update(flatten_belief_data(belief))
+
+    return row
+
+
+def _process_pose_frame(context, index, alpha, beta, tau):
+    """Xử lý hoàn chỉnh một frame."""
+    frame_id = index + 1
+
+    joints, belief = _calculate_frame_pose(
+        context, index, alpha, beta, tau
+    )
+
+    source_frame_id = _get_source_frame_id(
+        context["tracking_ids"],
+        context["cam1_start"],
+        index,
+    )
+
+    metadata = _build_frame_metadata(
+        context, source_frame_id
+    )
+
+    pkl_frame_id = _write_frame_jsons(
+        context, frame_id, joints, metadata, belief
+    )
+
+    return _build_pose_csv_row(
+        context,
+        frame_id,
+        pkl_frame_id,
+        source_frame_id,
+        joints,
+        metadata,
+        belief,
+    )
+
+
+def _build_pose_csv_fieldnames(joint_names):
+    """Tạo danh sách cột CSV theo thứ tự YAML."""
     fieldnames = [
-        "F_ID",
-        "Set",
-        "Cam",
-        "PKL_F_ID",
-        "offset",
-        "left_start",
-        f"PKLs",
-        f"FrameIndices",
+        "F_ID", "Set", "Cam", "PKL_F_ID",
+        "offset", "left_start", "PKLs", "FrameIndices",
     ]
 
-    # Tọa độ 3D: giữ nguyên thứ tự joint trong YAML
     for joint_name in joint_names:
         for axis in ("x", "y", "z"):
-            fieldnames.append(
-                f"{joint_name}.{axis}"
-            )
+            fieldnames.append(f"{joint_name}.{axis}")
 
-    # Belief: giữ nguyên thứ tự joint trong YAML
     for joint_name in joint_names:
         for attribute in (
             "global_belief",
@@ -354,24 +390,82 @@ def run_pose_export(
                 f"{joint_name}.{MAPPING[attribute]}"
             )
 
+    return fieldnames
+
+
+def _validate_pose_csv_rows(csv_rows, fieldnames):
+    """Kiểm tra sự tương ứng giữa dữ liệu và các cột CSV."""
+    expected = set(fieldnames)
+
+    for index, row in enumerate(csv_rows):
+        missing = expected - set(row)
+        extra = set(row) - expected
+
+        if missing or extra:
+            raise ValueError(
+                f"CSV row {index + 1} has invalid keys. "
+                f"Missing: {sorted(missing)}; "
+                f"Extra: {sorted(extra)}"
+            )
+
+
+def _write_pose_csv(csv_rows, fieldnames, output_dir):
+    """Kiểm tra và ghi dữ liệu CSV."""
     csv_path = output_dir / "pose_export.csv"
 
-    with csv_path.open(
-        "w",
-        newline="",
-        encoding="utf-8-sig",
-    ) as csv_file:
+    _validate_pose_csv_rows(csv_rows, fieldnames)
 
+    with csv_path.open(
+        "w", newline="", encoding="utf-8-sig"
+    ) as csv_file:
         writer = csv.DictWriter(
             csv_file,
             fieldnames=fieldnames,
-            extrasaction="ignore",
+            extrasaction="raise",
         )
-
         writer.writeheader()
         writer.writerows(csv_rows)
 
-    print(f"[Pose] Done. Output: {output_dir}")
+    return csv_path
+
+
+def run_pose_export(
+    args,
+    belief_alpha=0.1,
+    belief_beta=0.8,
+    occlusion_tau=0.05,
+    config=None,
+) -> None:
+    """Export 3D pose, metadata và belief ra JSON/CSV."""
+
+    context = _prepare_pose_export_context(args, config)
+    csv_rows = []
+
+    for index in tqdm(
+        range(context["min_frames"]),
+        desc="[Pose] Exporting JSONs and CSV",
+        unit="frame",
+    ):
+        row = _process_pose_frame(
+            context,
+            index,
+            belief_alpha,
+            belief_beta,
+            occlusion_tau,
+        )
+        csv_rows.append(row)
+
+    fieldnames = _build_pose_csv_fieldnames(
+        context["joint_names"]
+    )
+
+    csv_path = _write_pose_csv(
+        csv_rows,
+        fieldnames,
+        context["output_dir"],
+    )
+
+    print(f"[Pose] Done. Output: {context['output_dir']}")
     print(f"[Pose] CSV exported: {csv_path}")
     print(f"[Pose] Frames exported: {len(csv_rows)}")
     print(f"[Pose] CSV columns: {len(fieldnames)}")
