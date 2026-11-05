@@ -506,14 +506,7 @@ def enforce_bone_lengths(points: dict, ref_points: dict) -> None:
         if dist > 1e-6:
             points[child] = [round(float(x), 6) for x in (p_p + v * (l_ref / dist))]
 
-def calculate_camera_belief(
-    joints,
-    verts,
-    joint_names,
-    alpha,
-    beta,
-    occlusion_tau,
-):
+def calculate_camera_belief(joints, verts, joint_names, alpha, beta, occlusion_tau,):
     visibility = compute_visibility_from_mesh_vertices(
         joints=joints,
         verts=verts,
