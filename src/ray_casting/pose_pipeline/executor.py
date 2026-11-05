@@ -350,8 +350,6 @@ def run_pose_export(
             fieldnames.append(
                 f"{joint_name}.{MAPPING[attribute]}"
             )
-    
-
 
     csv_path = output_dir / "pose_export.csv"
 
