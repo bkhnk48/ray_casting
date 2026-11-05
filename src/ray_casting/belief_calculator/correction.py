@@ -514,7 +514,6 @@ def calculate_camera_belief(joints, verts, joint_names, alpha, beta, occlusion_t
         intrinsics=None,
         occlusion_tau=occlusion_tau,
     )
-    pdb.set_trace()
 
 
     local_belief, global_belief = compute_single_camera_belief(
