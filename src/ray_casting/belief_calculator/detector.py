@@ -56,8 +56,9 @@ def get_orientation_flag(joints, epsilon=ORIENTATION_EPSILON):
 
 def load_torso_mask(seg_path=None):
     global _TORSO_MASK
+    pdb.set_trace()
     # 1. Prefer precomputed torso vertex indices
-    torso_idx_path = Path("models/torso_indices.npy")
+    torso_idx_path = Path("src/ray_casting/models/torso_indices.npy")
     if torso_idx_path.exists():
         try:
             indices = np.load(torso_idx_path)
@@ -129,13 +130,16 @@ def compute_visibility_from_mesh_vertices(joints, verts, intrinsics=None, occlus
     """
     visibility = {name: True for name in joints.keys()}
     if verts is None or _TORSO_MASK is None:
+        #pdb.set_trace()
         return visibility
     verts = np.asarray(verts, dtype=float)
     if verts.ndim != 2 or len(verts) != len(_TORSO_MASK):
+        #pdb.set_trace()
         return visibility
 
     torso_verts = verts[_TORSO_MASK]
     if len(torso_verts) < 4:
+        #pdb.set_trace()
         return visibility
 
     try:
@@ -150,16 +154,19 @@ def compute_visibility_from_mesh_vertices(joints, verts, intrinsics=None, occlus
                     mesh_extra = trimesh.Trimesh(vertices=extra_torso, faces=hull_extra.simplices, process=False)
                     mesh = trimesh.util.concatenate([mesh, mesh_extra])
     except Exception:
+        #pdb.set_trace()
         return visibility
 
     check_names = [name for name in joints.keys() if name in OCCLUSION_CHECK_JOINTS]
     if not check_names:
+        #pdb.set_trace()
         return visibility
 
     pts = np.array([as_xyz(joints[name]) for name in check_names], dtype=float)
     dists = np.linalg.norm(pts, axis=1)
     valid = dists > 1e-6
     if not np.any(valid):
+        #pdb.set_trace()
         return visibility
 
     ray_dirs = np.zeros_like(pts)
@@ -176,10 +183,10 @@ def compute_visibility_from_mesh_vertices(joints, verts, intrinsics=None, occlus
             orig_idx = valid_indices[ray_i]
             hit_dist = float(np.linalg.norm(loc))
             if hit_dist < (dists[orig_idx] - occlusion_tau):
+                #pdb.set_trace()
                 visibility[check_names[orig_idx]] = False
-                pdb.set_trace()
 
-
+    #pdb.set_trace()
     return visibility
 
 def compute_single_camera_belief(
