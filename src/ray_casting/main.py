@@ -23,6 +23,15 @@ if __name__ == "__main__":
                             default='inputs/datasets/mpi_inf_3dhpe/S8/Seq1/imageSequences/wham_video_0.pkl', 
                             help='input pkl file from WHAM')
 
+    parser.add_argument('--ground_truth', type=str, 
+                                default='inputs/datasets/mpi_inf_3dhpe/S8/Seq1/annot.mat', 
+                                help='Ground Truth of the MPI_INF_3DHPE')
+
+    parser.add_argument('--output', type=str, 
+                                    default='outputs/datasets/mpi_inf_3dhpe/S8/Seq1', 
+                                    help='Output for an estimation of the MPI_INF_3DHPE')
+
+    
     args = parser.parse_args()
     #data = load_keypoints3d_map(args.pkl)
     #lệnh dưới đây OK rồi
@@ -32,7 +41,7 @@ if __name__ == "__main__":
     require_ray_casting_backend()
     if load_torso_mask(None) is None:
         raise RuntimeError("fusion.occlusion.enabled requires a valid SMPL torso mask")
-    run_pose_export(args.pkl)
+    run_pose_export(args)
     """print(type(data))
 
     if isinstance(data, dict):
