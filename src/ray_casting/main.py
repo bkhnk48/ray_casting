@@ -37,12 +37,8 @@ if __name__ == "__main__":
 
     
     args = parser.parse_args()
-    #data = load_keypoints3d_map(args.pkl)
-    #lệnh dưới đây OK rồi
-    #data = load_pkl_data(args.pkl)
-    #data = 
+
     run_annot_mat_export(args)
-    
     run_pose_export(args)
     """print(type(data))
 
