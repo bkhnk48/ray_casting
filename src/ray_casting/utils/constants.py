@@ -1,1 +1,1 @@
-ALL = object()
+ALL = "ALL"
