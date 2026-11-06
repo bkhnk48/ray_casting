@@ -7,6 +7,7 @@ from pprint import pprint
 import csv
 from numbers import Real
 from datetime import datetime
+import re
 
 from pose_pipeline.smpl_runner import create_smpl_model
 from models.keypoints_map import load_keypoints3d_map
@@ -161,8 +162,14 @@ def _split_mpi_inf_3dhpe(cam_file):
     elems = cam_file.split("/")
     index = elems.index("imageSequences")
     set_name = elems[index - 2] + "/" + elems[index-1]
-    camera_name = elems[-1]
-    return set_name, camera_name
+    match = re.search(r'wham_(?:cam|video_)?(.*?)\.pkl', elems[-1])
+    x_value = None
+    if match:
+        x_value = match.group(1) # Lấy ra giá trị X
+        camera_name = "cam" + str(x_value)
+    else:
+        camera_name = elems[-1]
+    return set_name, camera_name, x_value
 
 
 def _create_pose_output_dirs(output_dir):
@@ -184,14 +191,12 @@ def _prepare_pose_export_context(args, config):
     """Khởi tạo model, dữ liệu PKL và thông tin camera."""
     cam1_file = Path(args.pkl)
     output_dir = Path(args.output)
-    set_name, camera_name = _split_mpi_inf_3dhpe(args.pkl)
+    set_name, camera_name, _ = _split_mpi_inf_3dhpe(args.pkl)
 
     directories = _create_pose_output_dirs(output_dir)
 
     print("[Pose] Loading SMPL model...")
-    model = create_smpl_model(
-        Path("src/ray_casting/models/SMPL_NEUTRAL.pkl")
-    )
+    model = create_smpl_model(Path(args.smpl))
 
     print(f"[Pose] Loading camera: {cam1_file} (target_person=1)")
     cam1_data = load_pkl_data(cam1_file, target_person="1")
@@ -207,9 +212,7 @@ def _prepare_pose_export_context(args, config):
         "source_pkls": {camera_name: camera_name},
     }
 
-    export_data = slice_person_frames(
-        cam1_data, cam1_start, min_frames
-    )
+    export_data = slice_person_frames(cam1_data, cam1_start, min_frames)
 
     map_path = "configs/keypoints3D_map.yml"
     map_data = load_keypoints3d_map(map_path)
