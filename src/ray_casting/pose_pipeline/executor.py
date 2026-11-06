@@ -17,6 +17,8 @@ from utils.json_io import write_json
 from utils.compat import load_joblib_compat, resolve_person_payload
 from belief_calculator.correction import calculate_camera_belief
 #from preprocess_pipeline.calib import resolve_selected_offset_from_camera_profile
+from belief_calculator.detector import load_torso_mask
+from belief_calculator.detector import require_ray_casting_backend
 import pdb
 
 POSE_OUTPUT_SUBDIRS = ("keypoints3d", "metadata")
@@ -438,6 +440,9 @@ def run_pose_export(
     config=None,
 ) -> None:
     """Export 3D pose, metadata và belief ra JSON/CSV."""
+    require_ray_casting_backend()
+    if load_torso_mask(None) is None:
+        raise RuntimeError("fusion.occlusion.enabled requires a valid SMPL torso mask")
 
     context = _prepare_pose_export_context(args, config)
     csv_rows = []
