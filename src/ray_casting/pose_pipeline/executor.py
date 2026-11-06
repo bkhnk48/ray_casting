@@ -6,6 +6,7 @@ from tqdm import tqdm  # Thêm thư viện tqdm tạo progress bar
 from pprint import pprint
 import csv
 from numbers import Real
+from datetime import datetime
 
 from pose_pipeline.smpl_runner import create_smpl_model
 from models.keypoints_map import load_keypoints3d_map
@@ -430,10 +431,7 @@ def _write_pose_csv(csv_rows, fieldnames, output_dir):
 
 
 def run_pose_export(
-    args,
-    belief_alpha=0.1,
-    belief_beta=0.8,
-    occlusion_tau=0.05,
+    args, belief_alpha=0.1, belief_beta=0.8, occlusion_tau=0.05,
     config=None,
 ) -> None:
     """Export 3D pose, metadata và belief ra JSON/CSV."""
@@ -465,9 +463,13 @@ def run_pose_export(
         context["output_dir"],
     )
 
-    print(f"[Pose] Done. Output: {context['output_dir']}")
-    print(f"[Pose] CSV exported: {csv_path}")
-    print(f"[Pose] Frames exported: {len(csv_rows)}")
-    print(f"[Pose] CSV columns: {len(fieldnames)}")
+    now = datetime.now()
+    # Định dạng chuỗi hiển thị: Ngày/Tháng/Năm Giờ:Phút:Giây
+    current_time = now.strftime("%d/%m/%Y %H:%M:%S")
+
+    print(f"[Pose] {current_time} Done. Output: {context['output_dir']}")
+    print(f"[Pose] {current_time} CSV exported: {csv_path}")
+    print(f"[Pose] {current_time} Frames exported: {len(csv_rows)}")
+    print(f"[Pose] {current_time} CSV columns: {len(fieldnames)}")
 
 """## 8. Fusion phase"""
