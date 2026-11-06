@@ -8,6 +8,7 @@ import csv
 from numbers import Real
 from datetime import datetime
 import re
+from utils.constants import *
 
 from pose_pipeline.smpl_runner import create_smpl_model
 from models.keypoints_map import load_keypoints3d_map
@@ -84,10 +85,16 @@ def load_pkl_data(file_path, target_person=None):
     person_data = resolve_person_payload(load_joblib_compat(file_path), pkl_path=file_path, target_person=target_person)
     if person_data is None:
         raise ValueError("Cannot read person payload from {}".format(file_path))
-    for key in ("pose", "trans", "betas"):
-        if key not in person_data:
-            raise KeyError("Missing key {!r} in {}. Available keys: {}".format(key, file_path, list(person_data.keys())))
-    return person_data
+    dict_people = {}
+    if isinstance(person_data, dict):
+        dict_people = person_data
+    else:
+        dict_people = { 0 : person_data}
+    for person in dict_people.values():
+        for key in ("pose", "trans", "betas"):
+            if key not in person:
+                raise KeyError("Missing key {!r} in {}. Available keys: {}".format(key, file_path, list(person.keys())))
+    return dict_people
 
 
 def slice_person_frames(person_data, start, frame_count):
@@ -117,6 +124,7 @@ def _shared_betas(*person_data: dict) -> np.ndarray:
 
 
 def _resolve_tracking_frame_ids(person_data):
+    pdb.set_trace()
     tracking = person_data.get("tracking_results_for_reproj")
     if not isinstance(tracking, dict) or "frame_id" not in tracking:
         return None
@@ -200,12 +208,13 @@ def _prepare_pose_export_context(args, config):
     print("[Pose] Loading SMPL model...")
     model = create_smpl_model(Path(args.smpl))
 
-    print(f"[Pose] Loading camera: {cam1_file} (target_person=1)")
-    cam1_data = load_pkl_data(cam1_file, target_person="1")
-    tracking_ids = _resolve_tracking_frame_ids(cam1_data)
+    print(f"[Pose] Loading camera: {cam1_file} (target_person=ALL)")
+    cam1_data = load_pkl_data(cam1_file, target_person="ALL")
+    pdb.set_trace()
+    tracking_ids = _resolve_tracking_frame_ids(cam1_data[0])
 
     cam1_start = 0
-    min_frames = len(cam1_data["pose"])
+    min_frames = len(cam1_data[0]["pose"])
     print(f"[Pose] Camera frames: {min_frames}")
 
     sync_result = {
@@ -214,7 +223,7 @@ def _prepare_pose_export_context(args, config):
         "source_pkls": {camera_name: camera_name},
     }
 
-    export_data = slice_person_frames(cam1_data, cam1_start, min_frames)
+    export_data = slice_person_frames(cam1_data[0], cam1_start, min_frames)
 
     map_path = "configs/keypoints3D_map.yml"
     map_data = load_keypoints3d_map(map_path)
@@ -222,7 +231,7 @@ def _prepare_pose_export_context(args, config):
 
     return {
         "model": model,
-        "cam1_data": cam1_data,
+        "cam1_data": cam1_data[0],
         "export_data": export_data,
         "tracking_ids": tracking_ids,
         "cam1_start": cam1_start,
@@ -329,7 +338,7 @@ def _build_pose_csv_row(context, frame_id, pkl_frame_id,
         "F_ID": frame_id,
         "Set": context["set_name"],
         "Cam": camera_name,
-        "PKL_F_ID": pkl_frame_id,
+        "Subject ID": pkl_frame_id,
         "offset": sync["offset"],
         "left_start": sync["left_start"],
         "PKLs": sync["source_pkls"][camera_name],
@@ -378,7 +387,7 @@ def _process_pose_frame(context, index, alpha, beta, tau):
 def _build_pose_csv_fieldnames(joint_names):
     """Tạo danh sách cột CSV theo thứ tự YAML."""
     fieldnames = [
-        "F_ID", "Set", "Cam", "PKL_F_ID",
+        "F_ID", "Set", "Cam", "Subject ID",
         "offset", "left_start", "PKLs", "FrameIndices",
     ]
 
