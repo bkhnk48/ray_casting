@@ -5,6 +5,8 @@ import joblib
 import inspect
 from pathlib import Path
 import pdb
+import pandas as pd
+
 from utils.constants import *
 
 def patch_numpy_aliases():
@@ -106,7 +108,14 @@ def resolve_track_key(track_str, wham_data):
 
 
 def find_tracks_by_person(wham_data, mapping, target_str):
-    candidates = []
+    candidates = {}
+
+
+    if target_str == ALL.lower():
+        for track_id in wham_data.keys():
+            candidates[track_id] = wham_data[track_id]
+        return candidates
+
 
     for track_str, person_name in mapping.items():
         if person_name != target_str:
@@ -115,15 +124,14 @@ def find_tracks_by_person(wham_data, mapping, target_str):
         track_id = resolve_track_key(track_str, wham_data)
 
         if track_id is not None:
-            candidates.append(wham_data[track_id])
-
+            candidates[track_id] = wham_data[track_id]
     return candidates
 
 
 def select_longest_person(candidates):
     if not candidates:
         return None
-
+    print("Có khả năng lỗi ở đây, cẩn thận khi candidates từ 17h10, 6/11/26 là dict thay vì list")
     return max(candidates, key=get_pose_length)
 
 
@@ -165,6 +173,8 @@ def resolve_target_person(wham_data, pkl_path, target_person):
         candidates = find_tracks_by_person(
             wham_data, mapping, target_str
         )
+        if target_person == ALL:
+            return candidates
 
         if candidates:
             return select_longest_person(candidates)
