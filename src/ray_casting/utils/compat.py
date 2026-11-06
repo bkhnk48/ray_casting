@@ -1,105 +1,229 @@
+
 import sys
 import numpy as np
 import joblib
 import inspect
+from pathlib import Path
 import pdb
+from utils.constants import *
+
+def patch_numpy_aliases():
+    aliases = {
+        "float": float,
+        "int": int,
+        "bool": bool,
+        "object": object,
+        "typeDict": np.sctypeDict,
+        "complex": complex,
+        "unicode": str,
+        "str": str,
+    }
+    for name, value in aliases.items():
+        if not hasattr(np, name):
+            setattr(np, name, value)
+
+
+def patch_inspect():
+    if not hasattr(inspect, "getargspec"):
+        inspect.getargspec = inspect.getfullargspec
+
 
 def patch_numpy_and_inspect():
-    if not hasattr(np, 'float'): np.float = float
-    if not hasattr(np, 'int'): np.int = int
-    if not hasattr(np, 'bool'): np.bool = bool
-    if not hasattr(np, 'object'): np.object = object
-    if not hasattr(np, 'typeDict'): np.typeDict = np.sctypeDict
-    if not hasattr(np, 'complex'): np.complex = complex
-    if not hasattr(np, 'unicode'): np.unicode = str
-    if not hasattr(np, 'str'): np.str = str
-    if not hasattr(inspect, 'getargspec'): inspect.getargspec = inspect.getfullargspec
+    patch_numpy_aliases()
+    patch_inspect()
+
 
 def configure_stdout_encoding():
-    if hasattr(sys.stdout, 'reconfigure'):
-        sys.stdout.reconfigure(encoding='utf-8')
-
-from pathlib import Path
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
 
 
 def load_joblib_compat(filepath):
-    with open(filepath, 'rb') as f:
-        return joblib.load(f)
+    with open(filepath, "rb") as file:
+        return joblib.load(file)
 
 
-def parse_person_mapping(pkl_path):
+def find_person_mapping_files(pkl_path):
     if pkl_path is None:
-        return {}
-    pkl_path = Path(pkl_path)
-    candidates = list(pkl_path.parent.glob("*person_mapping.txt"))
-    if not candidates and pkl_path.parent.parent.exists():
-        candidates = list(pkl_path.parent.parent.glob("**/*person_mapping.txt"))
+        return []
+
+    parent = Path(pkl_path).parent
+    candidates = list(parent.glob("*person_mapping.txt"))
+
+    if not candidates and parent.parent.exists():
+        candidates = list(
+            parent.parent.glob("**/*person_mapping.txt")
+        )
+
+    return candidates
+
+
+def read_person_mapping(mapping_file):
     mapping = {}
-    if candidates:
-        for line in candidates[0].read_text(encoding="utf-8").splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                mapping[k.strip()] = v.strip().lower()
+
+    for line in mapping_file.read_text(
+        encoding="utf-8"
+    ).splitlines():
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        mapping[key.strip()] = value.strip().lower()
+
     return mapping
 
 
-def resolve_person_payload(wham_data, pkl_path=None, target_person=None):
-    if not isinstance(wham_data, dict) and "defaultdict" not in str(type(wham_data)):
-        if isinstance(wham_data, list):
-            for v in wham_data:
-                if isinstance(v, dict):
-                    return v
+def parse_person_mapping(pkl_path):
+    candidates = find_person_mapping_files(pkl_path)
+
+    if not candidates:
+        return {}
+
+    return read_person_mapping(candidates[0])
+
+
+def is_person_dict(value):
+    return isinstance(value, dict)
+
+
+def get_pose_length(person_data):
+    if not is_person_dict(person_data):
+        return 0
+
+    return len(person_data.get("pose", []))
+
+
+def resolve_track_key(track_str, wham_data):
+    track_id = int(track_str) if track_str.isdigit() else track_str
+
+    if track_id in wham_data:
+        return track_id
+
+    if str(track_id) in wham_data:
+        return str(track_id)
+
+    return None
+
+
+def find_tracks_by_person(wham_data, mapping, target_str):
+    candidates = []
+
+    for track_str, person_name in mapping.items():
+        if person_name != target_str:
+            continue
+
+        track_id = resolve_track_key(track_str, wham_data)
+
+        if track_id is not None:
+            candidates.append(wham_data[track_id])
+
+    return candidates
+
+
+def select_longest_person(candidates):
+    if not candidates:
         return None
 
-    if target_person is not None:
-        target_str = str(target_person).strip().lower()
-        #các tên aria01, aria02, aria1, aria2 là dành cho dataset Harmony4D
-        #if target_str in ("aria1", "aria_1", "aria-1"):
-        #    target_str = "aria01"
-        #elif target_str in ("aria2", "aria_2", "aria-2"):
-        #    target_str = "aria02"
+    return max(candidates, key=get_pose_length)
 
-        if pkl_path is not None:
-            mapping = parse_person_mapping(pkl_path)
-            candidate_tracks = []
-            for track_str, person_name in mapping.items():
-                if person_name == target_str:
-                    track_id = int(track_str) if track_str.isdigit() else track_str
-                    if track_id in wham_data:
-                        candidate_tracks.append(wham_data[track_id])
-                    elif str(track_id) in wham_data:
-                        candidate_tracks.append(wham_data[str(track_id)])
-            if candidate_tracks:
-                return max(candidate_tracks, key=lambda v: len(v.get("pose", [])) if isinstance(v, dict) else 0)
-            if mapping:
-                # ponytail: strict identity - mapping exists but target is missing, never substitute another person
-                return None
 
-        if target_person in wham_data:
-            return wham_data[target_person]
-        if target_str in wham_data:
-            return wham_data[target_str]
-        if target_str.isdigit() and int(target_str) in wham_data:
-            return wham_data[int(target_str)]
+def resolve_mapped_person(wham_data, pkl_path, target_str):
+    mapping = parse_person_mapping(pkl_path)
+    candidates = find_tracks_by_person(
+        wham_data, mapping, target_str
+    )
 
-        # ponytail: strict identity - do NOT guess or substitute another person when target_person is specified
+    if candidates:
+        return select_longest_person(candidates)
+
+    if mapping:
         return None
 
+    return None
+
+
+def find_person_by_target_key(wham_data, target_person, target_str):
+    if target_person in wham_data:
+        return wham_data[target_person]
+
+    if target_str in wham_data:
+        return wham_data[target_str]
+
+    if target_str.isdigit():
+        numeric_id = int(target_str)
+        if numeric_id in wham_data:
+            return wham_data[numeric_id]
+
+    return None
+
+
+def resolve_target_person(wham_data, pkl_path, target_person):
+    target_str = str(target_person).strip().lower()
+
+    if pkl_path is not None:
+        mapping = parse_person_mapping(pkl_path)
+        candidates = find_tracks_by_person(
+            wham_data, mapping, target_str
+        )
+
+        if candidates:
+            return select_longest_person(candidates)
+
+        # Strict identity: không thay thế bằng người khác.
+        if mapping:
+            return None
+
+    return find_person_by_target_key(
+        wham_data, target_person, target_str
+    )
+
+
+def find_default_person(wham_data):
     if 0 in wham_data:
         return wham_data[0]
+
     if "0" in wham_data:
         return wham_data["0"]
-    best_person = None
-    max_frames = -1
-    for k, v in wham_data.items():
-        if isinstance(v, dict) and "pose" in v:
-            flen = len(v["pose"])
-            if flen > max_frames:
-                max_frames = flen
-                best_person = v
-    if best_person is not None:
-        return best_person
-    for v in wham_data.values():
-        if isinstance(v, dict):
-            return v
+
+    candidates = [
+        value
+        for value in wham_data.values()
+        if is_person_dict(value) and "pose" in value
+    ]
+
+    if candidates:
+        return max(candidates, key=get_pose_length)
+
+    for value in wham_data.values():
+        if is_person_dict(value):
+            return value
+
     return None
+
+
+def resolve_non_mapping_payload(wham_data):
+    if isinstance(wham_data, list):
+        for value in wham_data:
+            if is_person_dict(value):
+                return value
+
+    return None
+
+
+def is_mapping_payload(wham_data):
+    return (
+        isinstance(wham_data, dict)
+        or "defaultdict" in str(type(wham_data))
+    )
+
+
+def resolve_person_payload(wham_data, pkl_path=None, target_person=ALL):
+    if not is_mapping_payload(wham_data):
+        return resolve_non_mapping_payload(wham_data)
+
+    if target_person is not None:
+        return resolve_target_person(
+            wham_data, pkl_path, target_person
+        )
+
+    return find_default_person(wham_data)
