@@ -9,6 +9,7 @@ from pose_pipeline.executor import load_pkl_data
 from pose_pipeline.executor import run_pose_export
 from belief_calculator.detector import load_torso_mask
 from belief_calculator.detector import require_ray_casting_backend
+from preprocess_pipeline.annot_mat_to_csv import run_annot_mat_export
 
 def main():
     pass
@@ -28,8 +29,13 @@ if __name__ == "__main__":
                                 help='Ground Truth of the MPI_INF_3DHPE')
 
     parser.add_argument('--output', type=str, 
-                                    default='outputs/datasets/mpi_inf_3dhpe/S8/Seq1', 
+                                    default='outputs/datasets/mpi_inf_3dhpe/', 
                                     help='Output for an estimation of the MPI_INF_3DHPE')
+
+    parser.add_argument('--smpl', type=str, 
+                                        default="src/ray_casting/models/SMPL_NEUTRAL.pkl", 
+                                        help='Default path for SMPL model')
+
 
     
     args = parser.parse_args()
@@ -37,7 +43,7 @@ if __name__ == "__main__":
     #lệnh dưới đây OK rồi
     #data = load_pkl_data(args.pkl)
     #data = 
-    
+    run_annot_mat_export(args)
     require_ray_casting_backend()
     if load_torso_mask(None) is None:
         raise RuntimeError("fusion.occlusion.enabled requires a valid SMPL torso mask")
