@@ -20,6 +20,10 @@ from pathlib import Path
 import numpy as np
 from scipy.io import loadmat
 import pdb
+from pathlib import Path
+
+
+from pose_pipeline.executor import _split_mpi_inf_3dhpe
 
 # Thứ tự 13 joints trong CSV.
 JOINT_NAMES = [
@@ -181,13 +185,16 @@ def create_csv_columns():
     return columns
 
 
-def export(args):
-    print(f"Đọc file: {args.mat}")
-    mat = loadmat(
-        args.mat,
-        simplify_cells=True
-    )
-    pdb.set_trace()
+def run_annot_mat_export(args):
+    print(f"Đọc file: {args.ground_truth}")
+    try:
+        mat = loadmat(
+            args.ground_truth,
+            simplify_cells=True
+        )
+    except:
+        raise KeyError("Không tìm thấy annot.mat, thử tải tại: https://drive.google.com/file/d/11_b4Wge-r2l-VrSCY7ZrZQM95GUj1UUB/view?usp=drive_link")
+    set_name, camera_name, index_of_camera = _split_mpi_inf_3dhpe(args.pkl)
 
     # Kiểm tra các biến bắt buộc.
     if "annot3" not in mat:
@@ -222,7 +229,8 @@ def export(args):
     # Kiểm tra joint indices.
     joint_indices = JOINT_INDICES
 
-    output_path = Path(args.output)
+    # Sử dụng toán tử / để nối các thành phần đường dẫn
+    output_path = Path(args.output) / f"{set_name}_{camera_name}.csv"
     output_path.parent.mkdir(
         parents=True,
         exist_ok=True
@@ -247,8 +255,8 @@ def export(args):
 
             # Nếu chỉ định camera thì bỏ qua các camera khác.
             if (
-                args.camera is not None
-                and camera_id != args.camera
+                index_of_camera is not None
+                and camera_id != int(index_of_camera)
             ):
                 continue
 
@@ -298,13 +306,6 @@ def export(args):
                 len(frames)
             )
 
-            # Nếu người dùng chỉ định frame count.
-            if args.frame_count is not None:
-                n_frames = min(
-                    n_frames,
-                    args.frame_count
-                )
-
             print(
                 f"Số frames sẽ xuất: {n_frames}"
             )
@@ -323,7 +324,7 @@ def export(args):
             for frame_idx in range(n_frames):
 
                 row = [
-                    args.video,
+                    f"{set_name}_{camera_name}",
                     camera_id,
                     int(frame_numbers[frame_idx])
                 ]
